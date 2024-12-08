@@ -1,0 +1,80 @@
+
+# YAML mandates use of indentation like python so determine the structure and hierarchy
+# Prefered indentation is two spaces. 4 spaces can also be used. 
+# Consistency type of indentation is expected, mandatory.
+
+# in this code, name specifies text to be displayed in the output. helps track execution flow and status.
+
+name: Deploy to Azure Web App
+
+# on specifies the trigger which will initiate this workflow. 
+# branches narrows the scope to just 'main', so when there is a push to the specific branch it is initiated.
+on:
+  push:
+    branches:
+      - main
+
+# set of tasks to be executed and give them a name
+# runs-on specifies type of machine to use for running the job
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+  # env declares env variables populated using secrets set up in GitHub
+    env:
+      AZURE_WEBAPP_NAME: ${{ secrets.WEBAPP_NAME }}
+      AZURE_PLAN: ${{ secrets.AZURE_PLAN }}
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ secrets.ACR_NAME }}
+
+  # steps: lists the sequence of tasks or commands executed as part of the job
+    steps:
+    - name: Checkout code
+    # specifies the action to use - here it is checkout (clones repo into workflow for use)
+    # @v3 version of checkout. look up https://github.com/marketplace/actions/checkout
+    # latest version 
+    - name: Log in to Azure using Service Principal
+    # the latest version is 2.2 when we use v1, it will pick the latest within 1. series which is 1.6.1
+    # lookup https://github.com/marketplace/actions/azure-login
+      uses: azure/login@v1
+    # this page shows how login is done using credentials https://github.com/marketplace/actions/azure-login#login-with-a-service-principal-secret
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Log in to Azure Container Registry (ACR)
+    # executes any given command in CMD. 
+      run: |
+        az acr login --name $ACR_NAME
+
+    - name: Build and tag Docker image
+    # executes any given command in CMD. 
+      run: |
+        docker build -t $ACR_NAME.azurecr.io/fastapi-app:latest .
+
+    - name: Push Docker image to ACR
+    # executes any given command in CMD. 
+      run: |
+        docker push $ACR_NAME.azurecr.io/fastapi-app:latest
+
+    - name: Create or update Azure Web App with the ACR image
+    # creates web app based on the container
+    # the run syntax includes a | which is a pipe, used to indicate a multi-line command, allows run to span multiple lines
+    # to make it readable. 
+
+    # following are two commands connected with a || (OR) operator so only one will run
+    # if web app does not exist first line creates it and configures to pull the image
+    # $ACR_NAME.azurecr.io specifies the registry where the image is, fastapi-app:latest is the image name with tag
+    # effectively these commands act like run container based on an image and map to the web app so it serves requests
+      run: |
+        az webapp create --name $AZURE_WEBAPP_NAME \
+                         --resource-group $AZURE_RESOURCE_GROUP \
+                         --plan $AZURE_PLAN \
+                         --deployment-container-image-name $ACR_NAME.azurecr.io/fastapi-app:latest || \
+        az webapp config container set --name $AZURE_WEBAPP_NAME \
+                                       --resource-group $AZURE_RESOURCE_GROUP \
+                                       --docker-custom-image-name $ACR_NAME.azurecr.io/fastapi-app:latest \
+                                       --docker-registry-server-url https://$ACR_NAME.azurecr.io
+
+    - name: Restart Azure Web App
+      run: |
+        az webapp restart --name $AZURE_WEBAPP_NAME --resource-group $AZURE_RESOURCE_GROUP
